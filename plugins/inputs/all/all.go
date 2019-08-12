@@ -55,6 +55,7 @@ import (
 	_ "github.com/influxdata/telegraf/plugins/inputs/icinga2"
 	_ "github.com/influxdata/telegraf/plugins/inputs/influxdb"
 	_ "github.com/influxdata/telegraf/plugins/inputs/influxdb_listener"
+	_ "github.com/influxdata/telegraf/plugins/inputs/intelliflash"
 	_ "github.com/influxdata/telegraf/plugins/inputs/internal"
 	_ "github.com/influxdata/telegraf/plugins/inputs/interrupts"
 	_ "github.com/influxdata/telegraf/plugins/inputs/ipmi_sensor"

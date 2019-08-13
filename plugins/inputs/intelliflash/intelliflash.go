@@ -94,7 +94,7 @@ func (s *intelliflash) getOneMinuteSystemAnalyticsHistory(addr string, acc teleg
 
 	u, err := url.Parse(addr)
 	if err != nil {
-		return fmt.Errorf("Unable parse server address '%s': %s", addr, err)
+		return err
 	}
 
 	var data = []byte(`[["NETWORK", "POOL_PERFORMANCE", "CPU", "CACHE_HITS"]]`)
@@ -114,6 +114,8 @@ func (s *intelliflash) getOneMinuteSystemAnalyticsHistory(addr string, acc teleg
 
 	if s.Username != "" || s.Password != "" {
 		req.SetBasicAuth(s.Username, s.Password)
+	} else {
+		return fmt.Errorf("Username or password not set")
 	}
 
 	res, err := s.client.Do(req)

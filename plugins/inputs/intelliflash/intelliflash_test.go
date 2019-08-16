@@ -57,7 +57,7 @@ func TestCorrectJSON(t *testing.T) {
 	}
 	var acc testutil.Accumulator
 
-	err := i.importData(strings.NewReader(testResponse), &acc, "localhost")
+	err := i.importData(strings.NewReader(testResponse), &acc, "localhost", SYSTEM)
 	require.NoError(t, err)
 }
 
@@ -69,17 +69,17 @@ func TestIncorrectJSON(t *testing.T) {
 	}
 	var acc testutil.Accumulator
 
-	err := i.importData(strings.NewReader(incorrectJSON), &acc, "localhost")
+	err := i.importData(strings.NewReader(incorrectJSON), &acc, "localhost", SYSTEM)
 	require.Error(t, err)
 }
 
 func TestMetrics(t *testing.T) {
 	i := &intelliflash{
-		Servers:           []string{"https://localhost"},
-		Username:          "admin",
-		Password:          "admin",
-		SysMetricsInclude: []string{"CPU", "NETWORK"},
-		DataMetricsInclude: []dataMetrics{{
+		Servers:    []string{"https://localhost"},
+		Username:   "admin",
+		Password:   "admin",
+		SysMetrics: []string{"CPU", "NETWORK"},
+		DataMetrics: []dataMetrics{{
 			Protocols: []string{"nfs", "iscsi"},
 		}},
 	}

@@ -3,7 +3,9 @@ package intelliflash
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -20,46 +22,15 @@ const testResponse = `[
 	  "averages": {
 		"Controller-A/Total_Used": 0.25
 	  }
-	},
-	{
-	  "systemAnalyticsType": "NETWORK",
-	  "timestamps": [1565474000000],
-	  "datapoints": {
-		"Controller-B/IG/mgmt0/Transmit_Mbps": [ 0 ]
-	  },
-	  "averages": {
-		"Controller-B/IG/mgmt0/Transmit_Mbps": 0
-	  }
-	},
-	{
-	  "systemAnalyticsType": "CACHE_HITS",
-	  "timestamps": [
-		1565474000000
-	  ],
-	  "datapoints": {
-		"Controller-A/SSD_Reads": [0]
-	  },
-	  "averages": {
-		"Controller-A/SSD_Reads": 0
-	  }
-	},
-	{
-	  "systemAnalyticsType": "POOL_PERFORMANCE",
-	  "timestamps": [1565474000000],
-	  "datapoints": {
-		"pool-a/Data/Write_MBps": [0.12]
-	  },
-	  "averages": {
-		"pool-a/Data/Write_MBps": 0.12
-	  }
 	}
   ]`
 
 func TestEmptyUsernamePassword(t *testing.T) {
 	i := &intelliflash{
-		Servers:  []string{"https://localhost/test"},
-		Username: "",
-		Password: "",
+		Servers:         []string{"https://localhost/test"},
+		Username:        "",
+		Password:        "",
+		ResponseTimeout: internal.Duration{Duration: time.Duration(10)},
 	}
 	var acc testutil.Accumulator
 	i.Gather(&acc)
@@ -68,7 +39,7 @@ func TestEmptyUsernamePassword(t *testing.T) {
 
 func TestConnectionFailure(t *testing.T) {
 	i := &intelliflash{
-		Servers:  []string{"https://localhost/test"},
+		Servers:  []string{"https://localhost"},
 		Username: "admin",
 		Password: "admin",
 	}
@@ -80,7 +51,7 @@ func TestConnectionFailure(t *testing.T) {
 
 func TestCorrectJSON(t *testing.T) {
 	i := &intelliflash{
-		Servers:  []string{"https://localhost/test"},
+		Servers:  []string{"https://localhost"},
 		Username: "admin",
 		Password: "admin",
 	}
@@ -92,7 +63,7 @@ func TestCorrectJSON(t *testing.T) {
 
 func TestIncorrectJSON(t *testing.T) {
 	i := &intelliflash{
-		Servers:  []string{"https://localhost/test"},
+		Servers:  []string{"https://localhost"},
 		Username: "admin",
 		Password: "admin",
 	}
@@ -100,4 +71,18 @@ func TestIncorrectJSON(t *testing.T) {
 
 	err := i.importData(strings.NewReader(incorrectJSON), &acc, "localhost")
 	require.Error(t, err)
+}
+
+func TestMetrics(t *testing.T) {
+	i := &intelliflash{
+		Servers:           []string{"https://localhost"},
+		Username:          "admin",
+		Password:          "admin",
+		SysMetricsInclude: []string{"CPU", "NETWORK"},
+		DataMetricsInclude: []dataMetrics{{
+			Protocols: []string{"nfs", "iscsi"},
+		}},
+	}
+	var acc testutil.Accumulator
+	i.Gather(&acc)
 }

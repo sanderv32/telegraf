@@ -213,6 +213,7 @@ func (s *intelliflash) getOneMinuteAnalyticsHistory(addr string, acc telegraf.Ac
 
 func (s *intelliflash) importData(r io.Reader, acc telegraf.Accumulator, host string, t analyticsType) error {
 	var analytics []analyticsElement
+	var measurement string
 
 	resp, err := ioutil.ReadAll(r)
 	if err != nil {
@@ -235,6 +236,7 @@ func (s *intelliflash) importData(r io.Reader, acc telegraf.Accumulator, host st
 				name := strings.Split(dpname, "/")
 				switch t {
 				case SYSTEM:
+					measurement = analytics[idx].SystemAnalyticsType
 					switch strings.ToUpper(analytics[idx].SystemAnalyticsType) {
 					case "POOL_PERFORMANCE":
 						tags["pool"] = name[0]
@@ -258,11 +260,11 @@ func (s *intelliflash) importData(r io.Reader, acc telegraf.Accumulator, host st
 						fields[name[1]] = datapoint[midx]
 					}
 				case DATA:
+					measurement = analytics[idx].EntityType
 					tags[analytics[idx].EntityType] = analytics[idx].EntityName
 					fields[name[0]] = datapoint[midx]
 				}
-				// fmt.Println(dpname, datapoint, tags, fields, systemAnalytics[idx].Timestamps[midx])
-				acc.AddFields("intelliflash", fields, tags, time.Unix(analytics[idx].Timestamps[midx]/1000, 0))
+				acc.AddFields(measurement, fields, tags, time.Unix(analytics[idx].Timestamps[midx]/1000, 0))
 			}
 
 		}

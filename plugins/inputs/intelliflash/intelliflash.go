@@ -23,10 +23,11 @@ type analyticsType int
 const (
 	defaultResponseTimeout = 10 * time.Second
 	apiURI                 = "/zebi/api/v2"
-	// SYSTEM enum
-	SYSTEM analyticsType = 0
-	// DATA enum
-	DATA analyticsType = 1
+
+	// SYSTEM Enumerators
+	SYSTEM analyticsType = iota
+	// DATA Enumerators
+	DATA
 )
 
 // Intelliflash structure
@@ -37,14 +38,16 @@ type intelliflash struct {
 
 	ResponseTimeout internal.Duration
 
-	SysMetrics  []string      `toml:"system_metrics_include,omitempty"`
-	DataMetrics []dataMetrics `toml:"data_metrics,omitempty"`
+	SysMetrics      []string          `toml:"system_metrics_include,omitempty"`
+	DataMetrics     []dataMetrics     `toml:"data_metrics,omitempty"`
+	CapacityMetrics []capacityMetrics `toml:"capacity,omitempty"`
 
 	tls.ClientConfig
 	client *http.Client
 	Debug  bool
 
-	results chan *http.Response
+	// results    chan *http.Response
+	SystemName []string `json:"systemname,omitempty"`
 }
 
 type workerResponse struct {
@@ -56,6 +59,10 @@ type dataMetrics struct {
 	DataSets  []string `toml:"datasets,omitempty"`
 	Vms       []string `toml:"vms,omitempty"`
 	Protocols []string `toml:"protocols,omitempty"`
+}
+
+type capacityMetrics struct {
+	DataSetsPath []string `toml:"datasets_path,omitempty"`
 }
 
 type analyticsElement struct {
@@ -141,6 +148,9 @@ func (s *intelliflash) Gather(acc telegraf.Accumulator) error {
 	for _, server := range endpoints {
 		go func(serv string) {
 			defer wg.Done()
+			if err := s.listSystemProperties(serv); err != nil {
+				acc.AddError(err)
+			}
 			if err := s.getOneMinuteAnalyticsHistory(serv, acc, SYSTEM); err != nil {
 				acc.AddError(err)
 			}
@@ -153,6 +163,27 @@ func (s *intelliflash) Gather(acc telegraf.Accumulator) error {
 	}
 
 	wg.Wait()
+	return nil
+}
+
+func (s *intelliflash) listSystemProperties(addr string) error {
+	URL := "https://" + addr + apiURI + "/listSystemProperties"
+	data := []byte(`[["INTELLIFLASH_ARRAY_FQDN"]]`)
+
+	jobs := make(chan []byte, 1)
+	results := make(chan workerResponse, 1)
+	jobs <- data
+	s.doRequest(URL, jobs, results)
+	r := <-results
+	if r.err != nil {
+		return r.err
+	}
+
+	resp, err := ioutil.ReadAll(r.httpResponse.Body)
+	err = json.Unmarshal(resp, &s.SystemName)
+	if err != nil {
+		return fmt.Errorf("Error decoding JSON")
+	}
 	return nil
 }
 
@@ -232,7 +263,11 @@ func (s *intelliflash) importData(r io.Reader, acc telegraf.Accumulator, host st
 
 				tags := map[string]string{}
 
-				tags["array"] = host
+				if len(s.SystemName) == 0 {
+					tags["array"] = host
+				} else {
+					tags["array"] = s.SystemName[0]
+				}
 				name := strings.Split(dpname, "/")
 				switch t {
 				case SYSTEM:

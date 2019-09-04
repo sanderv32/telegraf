@@ -25,6 +25,21 @@ const testResponse = `[
 	}
   ]`
 
+func TestSampleAndDescription(t *testing.T) {
+	i := &intelliflash{}
+	description := i.Description()
+	sampleConfig := i.SampleConfig()
+	require.NotEmpty(t, description)
+	require.NotEmpty(t, sampleConfig)
+}
+
+func TestEmptyServers(t *testing.T) {
+	i := &intelliflash{}
+	var acc testutil.Accumulator
+	err := i.Gather(&acc)
+	require.Contains(t, err.Error(), "no servers specified")
+}
+
 func TestEmptyUsernamePassword(t *testing.T) {
 	i := &intelliflash{
 		Servers:         []string{"https://localhost/test"},
@@ -46,7 +61,7 @@ func TestConnectionFailure(t *testing.T) {
 
 	var acc testutil.Accumulator
 	i.Gather(&acc)
-	require.Contains(t, acc.Errors[0].Error(), "Unable to connect to intelliflash server")
+	require.Contains(t, acc.Errors[0].Error(), "Unable to connect to intelliflash")
 }
 
 func TestCorrectJSON(t *testing.T) {

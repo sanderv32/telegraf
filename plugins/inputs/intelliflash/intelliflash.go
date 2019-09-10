@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,13 +23,14 @@ const (
 	defaultResponseTimeout = 10 * time.Second
 	apiURI                 = "/zebi/api/v2"
 
-	// SYSTEM Enumerators
+	// SYSTEM Enumerator
 	SYSTEM analyticsType = iota
-	// DATA Enumerators
+	// DATA Enumerator
 	DATA
+	// CAPACITY Enumerator
+	CAPACITY
 )
 
-// Intelliflash structure
 type intelliflash struct {
 	Servers  []string
 	Username string
@@ -38,9 +38,9 @@ type intelliflash struct {
 
 	ResponseTimeout internal.Duration
 
-	SysMetrics      []string          `toml:"system_metrics_include,omitempty"`
-	DataMetrics     []dataMetrics     `toml:"data_metrics,omitempty"`
-	CapacityMetrics []capacityMetrics `toml:"capacity,omitempty"`
+	SysMetrics      []string                   `toml:"system_metrics_include,omitempty"`
+	DataMetrics     map[string]dataMetrics     `toml:"data_metrics,omitempty"`
+	CapacityMetrics map[string]capacityMetrics `toml:"capacity,omitempty"`
 
 	tls.ClientConfig
 	client *http.Client
@@ -50,9 +50,12 @@ type intelliflash struct {
 	SystemName []string `json:"systemname,omitempty"`
 }
 
-type workerResponse struct {
-	httpResponse *http.Response
-	err          error
+type Pools []Pool
+
+type Pool struct {
+	Name          string `json:"name"`
+	AvailableSize int64  `json:"availableSize"`
+	TotalSize     int64  `json:"totalSize"`
 }
 
 type dataMetrics struct {
@@ -72,6 +75,10 @@ type analyticsElement struct {
 	Timestamps          []int64              `json:"timestamps"`
 	Datapoints          map[string][]float64 `json:"datapoints"`
 	Averages            map[string]float64   `json:"averages"`
+	// Pool capacity
+	Name          string `json:"name"`
+	AvailableSize int64  `json:"availableSize"`
+	TotalSize     int64  `json:"totalSize"`
 }
 
 type zebiException struct {
@@ -91,7 +98,7 @@ var sampleConfig = `
   interval = "1m"
 
   ## An array of address to gather stats about. Specify an ip on hostname.
-  servers = ["localhost","127.0.0.1"]
+  servers = ["localhost"]
 
   ## Credentials for basic HTTP authentication
   username = "admin"
@@ -116,10 +123,14 @@ var sampleConfig = `
   # response_timeout = "5s"
 
   # Data metrics to include (By default no data metrics are collected)
-  # [[inputs.intelliflash.data_metrics]]
+  # [inputs.intelliflash.data_metrics."localhost"]
   #   datasets = ["Pool-A/Project/Dataset", "Pool-B/Project/Dataset"]
   #   vms = ["Pool-A/vm-test", "Pool-B/vm-test"]
   #   protocols = ["nfs", "smb", "iscsi", "fc"]
+
+  # Capacity metric to include (By default no capacity metrics are collected)
+  # [inputs.intelliflash.capacity."localhost"]
+  #   datasets_path = [ "Pool-A/Local/Share", "Pool-A/Repli/Share" ]
 `
 
 // SampleConfig func
@@ -154,8 +165,13 @@ func (s *intelliflash) Gather(acc telegraf.Accumulator) error {
 			if err := s.getOneMinuteAnalyticsHistory(serv, acc, SYSTEM); err != nil {
 				acc.AddError(err)
 			}
-			if len(s.DataMetrics) > 0 {
+			if s.DataMetrics != nil {
 				if err := s.getOneMinuteAnalyticsHistory(serv, acc, DATA); err != nil {
+					acc.AddError(err)
+				}
+			}
+			if s.CapacityMetrics != nil {
+				if err := s.getCapacity(serv, acc, CAPACITY); err != nil {
 					acc.AddError(err)
 				}
 			}
@@ -168,21 +184,33 @@ func (s *intelliflash) Gather(acc telegraf.Accumulator) error {
 
 func (s *intelliflash) listSystemProperties(addr string) error {
 	URL := "https://" + addr + apiURI + "/listSystemProperties"
-	data := []byte(`[["INTELLIFLASH_ARRAY_FQDN"]]`)
 
-	jobs := make(chan []byte, 1)
-	results := make(chan workerResponse, 1)
-	jobs <- data
-	s.doRequest(URL, jobs, results)
-	r := <-results
-	if r.err != nil {
-		return r.err
+	resp, err := s.doRequest(URL, "POST", []byte(`[["INTELLIFLASH_ARRAY_FQDN"]]`))
+	if err != nil {
+		return err
 	}
 
-	resp, err := ioutil.ReadAll(r.httpResponse.Body)
-	err = json.Unmarshal(resp, &s.SystemName)
+	err = json.NewDecoder(resp.Body).Decode(&s.SystemName)
 	if err != nil {
 		return fmt.Errorf("Error decoding JSON")
+	}
+	return nil
+}
+
+func (s *intelliflash) getCapacity(addr string, acc telegraf.Accumulator, t analyticsType) error {
+	// var pools Pools
+	URL := "https://" + addr + apiURI + "/listPools"
+	resp, err := s.doRequest(URL, "GET", []byte("[]"))
+	if err != nil {
+		return err
+	}
+
+	// err = json.NewDecoder(resp.Body).Decode(&pools)
+	// if err != nil {
+	// 	return fmt.Errorf("Error decoding JSON")
+	// }
+	if err := s.importData(resp.Body, acc, addr, t); err != nil {
+		return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, err)
 	}
 	return nil
 }
@@ -191,9 +219,6 @@ func (s *intelliflash) getOneMinuteAnalyticsHistory(addr string, acc telegraf.Ac
 	var URL string
 	var data []byte
 
-	jobs := make(chan []byte, 100)
-	results := make(chan workerResponse, 100)
-
 	switch t {
 	case SYSTEM:
 		URL = "https://" + addr + apiURI + "/getOneMinuteSystemAnalyticsHistory"
@@ -201,8 +226,6 @@ func (s *intelliflash) getOneMinuteAnalyticsHistory(addr string, acc telegraf.Ac
 		if len(s.SysMetrics) > 0 {
 			data = []byte(`[["` + strings.Join(s.SysMetrics[:], `","`) + `"]]`)
 		}
-
-		jobs <- data
 	case DATA:
 		URL = "https://" + addr + apiURI + "/getOneMinuteDataAnalyticsHistory"
 		for _, datametric := range s.DataMetrics {
@@ -212,46 +235,28 @@ func (s *intelliflash) getOneMinuteAnalyticsHistory(addr string, acc telegraf.Ac
 				emptyThenNull(strings.ToUpper(strings.Join(datametric.Protocols[:], `","`))),
 			)
 			data = []byte(jsonreq)
-			jobs <- data
 		}
 	default:
 		return fmt.Errorf("Unknown analytics type")
 	}
 
-	var wg sync.WaitGroup
+	result, err := s.doRequest(URL, "POST", data)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.doRequest(URL, jobs, results)
-	}()
-	wg.Wait()
+	if err != nil {
+		return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, err)
+	}
 
-	for {
-		result, ok := <-results
-		if ok == false {
-			break
-		}
-		if result.err != nil {
-			return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, result.err)
-		}
-		if err := s.importData(result.httpResponse.Body, acc, addr, t); err != nil {
-			return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, err)
-		}
+	if err := s.importData(result.Body, acc, addr, t); err != nil {
+		return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, err)
 	}
 	return nil
 }
 
-func (s *intelliflash) importData(r io.Reader, acc telegraf.Accumulator, host string, t analyticsType) error {
+func (s *intelliflash) importData(resp io.Reader, acc telegraf.Accumulator, host string, t analyticsType) error {
 	var analytics []analyticsElement
 	var measurement string
 
-	resp, err := ioutil.ReadAll(r)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(resp, &analytics)
+	err := json.NewDecoder(resp).Decode(&analytics)
 	if err != nil {
 		return fmt.Errorf("Error decoding JSON")
 	}
@@ -298,6 +303,8 @@ func (s *intelliflash) importData(r io.Reader, acc telegraf.Accumulator, host st
 					measurement = analytics[idx].EntityType
 					tags[analytics[idx].EntityType] = analytics[idx].EntityName
 					fields[name[0]] = datapoint[midx]
+				case CAPACITY:
+					fmt.Println("blabla")
 				}
 				acc.AddFields(measurement, fields, tags, time.Unix(analytics[idx].Timestamps[midx]/1000, 0))
 			}
@@ -307,14 +314,12 @@ func (s *intelliflash) importData(r io.Reader, acc telegraf.Accumulator, host st
 	return nil
 }
 
-func (s *intelliflash) doRequest(URL string, data <-chan []byte, results chan<- workerResponse) {
+func (s *intelliflash) doRequest(URL string, method string, data []byte) (*http.Response, error) {
 	var zebexception zebiException
 	if s.client == nil {
 		tlsCfg, err := s.ClientConfig.TLSConfig()
 		if err != nil {
-			results <- workerResponse{nil, err}
-			close(results)
-			return
+			return nil, err
 		}
 		tr := &http.Transport{
 			ResponseHeaderTimeout: time.Duration(3 * time.Second),
@@ -329,12 +334,10 @@ func (s *intelliflash) doRequest(URL string, data <-chan []byte, results chan<- 
 
 	u, err := url.Parse(URL)
 	if err != nil {
-		results <- workerResponse{nil, err}
-		close(results)
-		return
+		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", URL, bytes.NewBuffer(<-data))
+	req, err := http.NewRequest(method, URL, bytes.NewBuffer(data))
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -348,33 +351,23 @@ func (s *intelliflash) doRequest(URL string, data <-chan []byte, results chan<- 
 	if s.Username != "" || s.Password != "" {
 		req.SetBasicAuth(s.Username, s.Password)
 	} else {
-		results <- workerResponse{nil, fmt.Errorf("Username or password not set")}
-		close(results)
-		return
+		return nil, fmt.Errorf("Username or password not set")
 	}
 
 	res, err := s.client.Do(req)
 	if err != nil {
-		results <- workerResponse{nil, fmt.Errorf("Unable to connect to intelliflash API '%s': %s", addr, err)}
-		close(results)
-		return
+		return nil, fmt.Errorf("Unable to connect to intelliflash API '%s': %s", addr, err)
 	}
 
 	if res.StatusCode != 200 {
 		errortxt := fmt.Sprintf("Unable to get valid stat result from '%s', http response code : %d", addr, res.StatusCode)
 		if s.Debug {
-			zebiresp, err := ioutil.ReadAll(res.Body)
-			if err == nil {
-				json.Unmarshal(zebiresp, &zebexception)
-				errortxt = fmt.Sprintf("%s, ZEBI error '%s'", errortxt, zebexception.Message)
-			}
+			json.NewDecoder(res.Body).Decode(&zebexception)
+			errortxt = fmt.Sprintf("%s, ZEBI error '%s'", errortxt, zebexception.Message)
 		}
-		results <- workerResponse{nil, fmt.Errorf(errortxt)}
-		close(results)
-		return
+		return nil, fmt.Errorf(errortxt)
 	}
-	results <- workerResponse{res, nil}
-	close(results)
+	return res, nil
 }
 
 func emptyThenNull(str string) string {

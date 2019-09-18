@@ -192,7 +192,7 @@ func (s *intelliflash) listSystemProperties(addr string) error {
 
 	err = json.NewDecoder(resp.Body).Decode(&s.SystemName)
 	if err != nil {
-		return fmt.Errorf("Error decoding JSON")
+		return fmt.Errorf("error decoding JSON")
 	}
 	return nil
 }
@@ -205,12 +205,8 @@ func (s *intelliflash) getCapacity(addr string, acc telegraf.Accumulator, t anal
 		return err
 	}
 
-	// err = json.NewDecoder(resp.Body).Decode(&pools)
-	// if err != nil {
-	// 	return fmt.Errorf("Error decoding JSON")
-	// }
 	if err := s.importData(resp.Body, acc, addr, t); err != nil {
-		return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, err)
+		return fmt.Errorf("unable to parse stats result from '%s': %s", addr, err)
 	}
 	return nil
 }
@@ -237,17 +233,17 @@ func (s *intelliflash) getOneMinuteAnalyticsHistory(addr string, acc telegraf.Ac
 			data = []byte(jsonreq)
 		}
 	default:
-		return fmt.Errorf("Unknown analytics type")
+		return fmt.Errorf("unknown analytics type")
 	}
 
 	result, err := s.doRequest(URL, "POST", data)
 
 	if err != nil {
-		return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, err)
+		return fmt.Errorf("unable to parse stats result from '%s': %s", addr, err)
 	}
 
 	if err := s.importData(result.Body, acc, addr, t); err != nil {
-		return fmt.Errorf("Unable to parse stats result from '%s': %s", addr, err)
+		return fmt.Errorf("unable to parse stats result from '%s': %s", addr, err)
 	}
 	return nil
 }
@@ -258,57 +254,63 @@ func (s *intelliflash) importData(resp io.Reader, acc telegraf.Accumulator, host
 
 	err := json.NewDecoder(resp).Decode(&analytics)
 	if err != nil {
-		return fmt.Errorf("Error decoding JSON")
+		return fmt.Errorf("error decoding JSON")
 	}
 
 	for idx := range analytics {
-		for dpname, datapoint := range analytics[idx].Datapoints {
-			for midx := range datapoint {
-				fields := make(map[string]interface{})
+		fields := make(map[string]interface{})
 
-				tags := map[string]string{}
+		tags := map[string]string{}
 
-				if len(s.SystemName) == 0 {
-					tags["array"] = host
-				} else {
-					tags["array"] = s.SystemName[0]
-				}
-				name := strings.Split(dpname, "/")
-				switch t {
-				case SYSTEM:
-					measurement = analytics[idx].SystemAnalyticsType
-					switch strings.ToUpper(analytics[idx].SystemAnalyticsType) {
-					case "POOL_PERFORMANCE":
-						tags["pool"] = name[0]
-						tags["disktype"] = name[1]
-						fields[name[2]] = datapoint[midx]
-					case "NETWORK":
-						tags["controller"] = name[0]
-						if strings.HasPrefix(name[1], "I") {
-							// Interface[Group] metrics
-							tags["interface"] = name[2]
-							fields[name[3]] = datapoint[midx]
-						} else {
-							// Controller totals
-							fields[name[1]+"_"+name[2]] = datapoint[midx]
+		if len(s.SystemName) == 0 {
+			tags["array"] = host
+		} else {
+			tags["array"] = s.SystemName[0]
+		}
+		switch {
+		case t == SYSTEM || t == DATA:
+				for dpname, datapoint := range analytics[idx].Datapoints {
+					for midx := range datapoint {
+						name := strings.Split(dpname, "/")
+						switch t {
+						case SYSTEM:
+							measurement = analytics[idx].SystemAnalyticsType
+							switch strings.ToUpper(analytics[idx].SystemAnalyticsType) {
+							case "POOL_PERFORMANCE":
+								tags["pool"] = name[0]
+								tags["disktype"] = name[1]
+								fields[name[2]] = datapoint[midx]
+							case "NETWORK":
+								tags["controller"] = name[0]
+								if strings.HasPrefix(name[1], "I") {
+									// Interface[Group] metrics
+									tags["interface"] = name[2]
+									fields[name[3]] = datapoint[midx]
+								} else {
+									// Controller totals
+									fields[name[1]+"_"+name[2]] = datapoint[midx]
+								}
+							case "CPU":
+								tags["controller"] = name[0]
+								fields[name[1]] = datapoint[midx]
+							case "CACHE_HITS":
+								tags["controller"] = name[0]
+								fields[name[1]] = datapoint[midx]
+							}
+						case DATA:
+							measurement = analytics[idx].EntityType
+							tags[strings.ToLower(analytics[idx].EntityType)] = analytics[idx].EntityName
+							fields[name[0]] = datapoint[midx]
 						}
-					case "CPU":
-						tags["controller"] = name[0]
-						fields[name[1]] = datapoint[midx]
-					case "CACHE_HITS":
-						tags["controller"] = name[0]
-						fields[name[1]] = datapoint[midx]
+						acc.AddFields(measurement, fields, tags, time.Unix(analytics[idx].Timestamps[midx]/1000, 0))
 					}
-				case DATA:
-					measurement = analytics[idx].EntityType
-					tags[analytics[idx].EntityType] = analytics[idx].EntityName
-					fields[name[0]] = datapoint[midx]
-				case CAPACITY:
-					fmt.Println("blabla")
 				}
-				acc.AddFields(measurement, fields, tags, time.Unix(analytics[idx].Timestamps[midx]/1000, 0))
-			}
-
+		case t == CAPACITY:
+			measurement = "CAPACITY"
+			tags["pool"] = analytics[idx].Name
+			fields["available_size"] = analytics[idx].AvailableSize
+			fields["total_size"] = analytics[idx].TotalSize
+			acc.AddFields(measurement, fields, tags, time.Now())
 		}
 	}
 	return nil
@@ -338,6 +340,9 @@ func (s *intelliflash) doRequest(URL string, method string, data []byte) (*http.
 	}
 
 	req, err := http.NewRequest(method, URL, bytes.NewBuffer(data))
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -351,19 +356,20 @@ func (s *intelliflash) doRequest(URL string, method string, data []byte) (*http.
 	if s.Username != "" || s.Password != "" {
 		req.SetBasicAuth(s.Username, s.Password)
 	} else {
-		return nil, fmt.Errorf("Username or password not set")
+		return nil, fmt.Errorf("username or password not set")
 	}
 
 	res, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to connect to intelliflash API '%s': %s", addr, err)
+		return nil, fmt.Errorf("unable to connect to intelliflash API '%s': %s", addr, err)
 	}
 
 	if res.StatusCode != 200 {
 		errortxt := fmt.Sprintf("Unable to get valid stat result from '%s', http response code : %d", addr, res.StatusCode)
 		if s.Debug {
-			json.NewDecoder(res.Body).Decode(&zebexception)
-			errortxt = fmt.Sprintf("%s, ZEBI error '%s'", errortxt, zebexception.Message)
+			if err := json.NewDecoder(res.Body).Decode(&zebexception); err == nil {
+				errortxt = fmt.Sprintf("%s, ZEBI error '%s'", errortxt, zebexception.Message)
+			}
 		}
 		return nil, fmt.Errorf(errortxt)
 	}

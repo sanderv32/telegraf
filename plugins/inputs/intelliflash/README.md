@@ -11,22 +11,32 @@ The Intelliflash plugin gathers statistics from the Intelliflash REST API
 ```
 
 ### Tags:
-
+#### System Metrics
 - POOL_PERFORMANCE:
     - pool
     - disktype
+    - array
 
 - NETWORK:
     - controller
     - interface
+    - array
 
 - CPU:
     - controller
+    - array
 
 - CACHE_HITS:
     - controller
+    - array
+    
+#### Data Metrics:
+All possible metrics are written in de [Intelliflash API Guide](https://github.com/Tegile/IntelliFlash-API-Reference-Guides). 
+- array
 
-### Data Metrics:
-All possible metrics are written in de [Intelliflash API Guide](https://github.com/Tegile/IntelliFlash-API-Reference-Guides).
+
+#### Capacity Metrics:
+- array
+- pool
 
 ### Example output:

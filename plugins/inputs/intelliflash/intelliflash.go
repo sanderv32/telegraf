@@ -155,9 +155,9 @@ func (s *intelliflash) Gather(acc telegraf.Accumulator) error {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(len(endpoints))
-	for idx, server := range endpoints {
-		go func(serv string, idx int) {
+	for _, server := range endpoints {
+		wg.Add(1)
+		go func(serv string) {
 			defer wg.Done()
 			if err := s.listSystemProperties(serv); err != nil {
 				acc.AddError(err)
@@ -175,10 +175,9 @@ func (s *intelliflash) Gather(acc telegraf.Accumulator) error {
 					acc.AddError(err)
 				}
 			}
-		}(server, idx)
+		}(server)
+		wg.Wait()
 	}
-
-	wg.Wait()
 	return nil
 }
 
